@@ -5,7 +5,10 @@ from gtts import gTTS
 import tempfile
 from src.rag_chain import query_rag
 from src.utils.metadata import get_all_metadata
-from src.utils.db_manager import load_all_chats, save_chat, get_chat, create_new_session, delete_chat
+from src.utils.db_manager import (
+    load_all_chats, save_chat, create_new_session, 
+    delete_chat, delete_all_chats, sign_in, sign_up, sign_out
+)
 import base64
 
 # Configuration de la page
@@ -121,24 +124,10 @@ st.markdown("""
         background: transparent !important;
     }
     
-    /* Microphone Styling - Clean and Aligned */
-    [data-testid="stAudioInput"] button {
-        background-color: #4caf50 !important;
-        color: white !important;
-        border: none !important;
-        border-radius: 50%;
-        width: 3rem;
-        height: 3rem;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-    }
-    [data-testid="stAudioInput"] button:hover {
-        background-color: #66bb6a !important;
-        transform: scale(1.05);
-    }
-    [data-testid="stAudioInput"] svg {
-        fill: white !important;
-        width: 1.5rem;
-        height: 1.5rem;
+    /* Logout button specific styling */
+    .logout-btn {
+        margin-top: 2rem;
+        color: #ef5350 !important;
     }
     
     h1 {
@@ -150,73 +139,26 @@ st.markdown("""
         margin-bottom: 0px;
     }
     
-    .source-tag {
-        background-color: rgba(46, 125, 50, 0.2);
-        color: #81c784;
-        border: 1px solid rgba(129, 199, 132, 0.3);
-        padding: 2px 10px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-    }
-    
     /* White Text for Chat */
     .stMarkdown, .stMarkdown p, .stMarkdown span, .stMarkdown div {
         color: #FFFFFF !important;
     }
     
     /* Custom Scrollbar */
-    ::-webkit-scrollbar {
-        width: 8px;
-    }
-    ::-webkit-scrollbar-track {
-        background: rgba(0,0,0,0.1);
-    }
-    ::-webkit-scrollbar-thumb {
-        background: rgba(46, 125, 50, 0.3);
-        border-radius: 10px;
-    }
-    ::-webkit-scrollbar-thumb:hover {
-        background: rgba(46, 125, 50, 0.5);
-    }
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-track { background: rgba(0,0,0,0.1); }
+    ::-webkit-scrollbar-thumb { background: rgba(46, 125, 50, 0.3); border-radius: 10px; }
+    
     /* Sidebar Text Fixes */
-    /* Input Labels */
-    .stTextInput label, .stSelectbox label {
-        color: #FFFFFF !important;
-        font-weight: 600;
-    }
-    
-    /* Expander Headers */
-    .streamlit-expanderHeader {
-        color: #FFFFFF !important;
-        background-color: transparent !important;
-        font-weight: 600;
-    }
-    div[data-testid="stExpander"] summary span {
-        color: #FFFFFF !important;
-    }
-    div[data-testid="stExpander"] svg {
-        fill: #FFFFFF !important;
-        color: #FFFFFF !important;
-    }
-    
-    /* Caption/Small text if needed */
-    .stCaptionContainer, [data-testid="stCaptionContainer"] {
-        color: #cccccc !important;
-    }
+    .stTextInput label, .stSelectbox label { color: #FFFFFF !important; font-weight: 600; }
+    .streamlit-expanderHeader { color: #FFFFFF !important; background-color: transparent !important; font-weight: 600; }
     
     /* --- CUSTOM BUTTON COLOR FIX --- */
-    /* Target the Primary Button and make it GREEN */
     div.stButton > button[kind="primary"] {
         background-color: #4caf50 !important;
         border-color: #4caf50 !important;
         color: white !important;
     }
-    div.stButton > button[kind="primary"]:hover {
-        background-color: #43a047 !important;
-        border-color: #43a047 !important;
-    }
-    
-    /* Chat History Items as Buttons (Secondary style override) */
     div.stButton > button[kind="secondary"] {
         background-color: rgba(255, 255, 255, 0.05);
         color: #e0e0e0;
@@ -226,17 +168,79 @@ st.markdown("""
         width: 100%;
         margin-bottom: 0.5rem;
     }
-    
     </style>
     """, unsafe_allow_html=True)
 
-# --- GESTION DE SESSION AVANCÉE ---
+# --- AUTHENTICATION UI ---
+
+def show_login_page():
+    st.markdown('<div class="header-container"><div class="agro-orb">🌱</div><h1>Accès Tèwou Agro</h1><p style="font-size: 1.2rem; opacity: 0.8; margin-top: 1rem;">Connectez-vous pour accéder à votre assistant personnalisé</p></div>', unsafe_allow_html=True)
+    
+    # Center the login form
+    _, col, _ = st.columns([1, 2, 1])
+    
+    with col:
+        tab1, tab2 = st.tabs(["Connexion", "Créer un compte"])
+        
+        with tab1:
+            with st.form("login_form"):
+                email = st.text_input("Email")
+                password = st.text_input("Mot de passe", type="password")
+                submit = st.form_submit_button("Se connecter", use_container_width=True, type="primary")
+                
+                if submit:
+                    user, error = sign_in(email, password)
+                    if error:
+                        st.error(f"Erreur : {error}")
+                    else:
+                        st.session_state.user = user
+                        st.success("Connexion réussie !")
+                        st.rerun()
+                        
+        with tab2:
+            st.info("Un email de confirmation peut vous être envoyé selon la configuration Supabase.")
+            with st.form("signup_form"):
+                new_email = st.text_input("Nouvel Email")
+                new_password = st.text_input("Nouveau Mot de passe", type="password")
+                confirm_password = st.text_input("Confirmer le mot de passe", type="password")
+                submit_signup = st.form_submit_button("Créer mon compte", use_container_width=True)
+                
+                if submit_signup:
+                    if new_password != confirm_password:
+                        st.error("Les mots de passe ne correspondent pas.")
+                    elif len(new_password) < 6:
+                        st.error("Le mot de passe doit faire au moins 6 caractères.")
+                    else:
+                        user, error = sign_up(new_email, new_password)
+                        if error:
+                            st.error(f"Erreur : {error}")
+                        else:
+                            st.success("Compte créé avec succès !")
+
+# --- GESTION DE SESSION ---
+
+if "user" not in st.session_state:
+    show_login_page()
+    st.stop()
+
+# Utilisateur actuel
+user = st.session_state.user
+
 if "session_id" not in st.session_state:
     st.session_state.session_id = create_new_session()
     st.session_state.messages = []
 
-# Sidebar
+# --- SIDEBAR ---
 with st.sidebar:
+    # Infos Utilisateur
+    st.markdown(f'<div class="sidebar-title">👤 {user.email}</div>', unsafe_allow_html=True)
+    if st.button("🚪 Déconnexion", use_container_width=True):
+        sign_out()
+        del st.session_state["user"]
+        st.rerun()
+        
+    st.markdown("---")
+    
     # 1. Action: Nouveau Chat
     cols_nav = st.columns([0.8, 0.2])
     with cols_nav[0]:
@@ -245,8 +249,8 @@ with st.sidebar:
             st.session_state.messages = []
             st.rerun()
     with cols_nav[1]:
-        if st.button("🗑️", help="Supprimer tout l'historique"):
-            if delete_all_chats():
+        if st.button("🗑️", help="Supprimer tout votre historique"):
+            if delete_all_chats(user_id=user.id):
                 st.session_state.session_id = create_new_session()
                 st.session_state.messages = []
                 st.rerun()
@@ -261,10 +265,10 @@ with st.sidebar:
     st.markdown("---")
     st.markdown('<div class="sidebar-title">🗂️ Vos discussions</div>', unsafe_allow_html=True)
     
-    # Chargement de l'historique
-    all_chats = load_all_chats()
+    # Chargement de l'historique FILTRÉ PAR L'UTILISATEUR
+    all_chats = load_all_chats(user_id=user.id)
     
-    # Filtrage
+    # Filtrage et tri
     sorted_sessions = sorted(all_chats.items(), key=lambda x: x[1]['updated_at'], reverse=True)
     
     found_chats = 0
@@ -272,15 +276,12 @@ with st.sidebar:
         for s_id, data in sorted_sessions:
             title = data.get("title", "Discussion sans titre")
             
-            # Application du filtre de recherche
             if search_query:
-                # Cherche dans le titre OU dans le contenu des messages
                 messages_content = " ".join([m["content"] for m in data["messages"]])
                 if (search_query.lower() not in title.lower()) and (search_query.lower() not in messages_content.lower()):
                     continue
 
             found_chats += 1
-            # Affichage du bouton pour charger la session + Bouton supprimer
             cols = st.columns([0.85, 0.15])
             with cols[0]:
                 if st.button(f"📄 {title}", key=f"hist_{s_id}", use_container_width=True):
@@ -296,23 +297,13 @@ with st.sidebar:
                     st.rerun()
         
         if found_chats == 0:
-            if search_query:
-                st.caption("Aucune discussion trouvée.")
-            elif not all_chats:
-                st.caption("Aucune discussion sauvegardée.")
+            st.caption("Aucune discussion." if not search_query else "Aucun résultat.")
 
     st.markdown("---")
     
-    # 4. Configuration & Bibliothèque
+    # 4. Configuration
     with st.expander("📍 Configuration"):
-        soil_types = [
-            "Sols sablonneux (Dior)", 
-            "Sols sablo-argileux (Deck)", 
-            "Sols argileux (Deck-Dior)", 
-            "Sols ferrugineux tropicaux",
-            "Sols halomorphes (Salés)",
-            "Non spécifié"
-        ]
+        soil_types = ["Sols sablonneux (Dior)", "Sols sablo-argileux (Deck)", "Sols argileux (Deck-Dior)", "Sols ferrugineux tropicaux", "Sols halomorphes (Salés)", "Non spécifié"]
         selected_soil = st.selectbox("Type de sol", soil_types, index=5)
         location = st.text_input("Localité", "Sénégal")
     
@@ -321,11 +312,10 @@ with st.sidebar:
         metadata = get_all_metadata()
         if metadata:
             st.info(f"{len(metadata)} documents indexés")
-            with st.expander("Voir les sources"):
-                for entry in metadata[-10:]:
-                    st.write(f"📄 {entry.get('metadata', {}).get('title', 'Doc')}")
     except:
         pass
+
+# --- MAIN CHAT AREA ---
 
 # Header
 logo_html = f'<center><img src="data:image/png;base64,{logo_b64}" width="350" style="margin-bottom: 2rem; filter: drop-shadow(0 0 15px rgba(129, 199, 132, 0.4));"></center>' if logo_b64 else ""
@@ -340,85 +330,34 @@ Votre compagnon agricole intelligent pour le Sénégal
 </div>
 """, unsafe_allow_html=True)
 
-# Affichage de l'historique des messages
+# Affichage des messages
 for message in st.session_state.messages:
     avatar = "🧑‍🌾" if message["role"] == "user" else LOGO_PATH
     with st.chat_message(message["role"], avatar=avatar):
         st.markdown(message["content"])
 
-
-# Zone de saisie utilisateur (Texte OU Vocal)
-chat_container = st.container()
-input_container = st.empty()
-
-# CSS pour fixer le micro (Désactivé temporairement)
-# st.markdown("""
-# <style>
-# [data-testid="stAudioInput"] {
-#     position: fixed;
-#     bottom: 35px;
-#     right: 25px;
-#     z-index: 1001;
-#     width: 3rem;
-# }
-# </style>
-# """, unsafe_allow_html=True)
-
-# Zone de saisie
-# audio_value = st.audio_input("Micro", label_visibility="collapsed")
-audio_value = None
+# Saisie utilisateur
 text_input = st.chat_input("Posez votre question agricole ici...")
 
-prompt = None
-
-# Gestion de l'audio
-if audio_value:
-    with st.spinner("Transcription..."):
-        try:
-            r = sr.Recognizer()
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_audio:
-                tmp_audio.write(audio_value.read())
-                tmp_audio_path = tmp_audio.name
-            
-            with sr.AudioFile(tmp_audio_path) as source:
-                audio_data = r.record(source)
-                prompt = r.recognize_google(audio_data, language="fr-FR")
-            os.remove(tmp_audio_path)
-        except Exception as e:
-            st.error(f"Erreur audio: {e}")
-
-# Gestion du texte (priorité au texte si les deux sont présents, ou enchaînement)
 if text_input:
-    prompt = text_input
-    audio_value = None # Disable TTS if text input is used
-
-if prompt:
-    # Affichage du message utilisateur - ICONE UTILISATEUR
+    # Message Utilisateur
     with st.chat_message("user", avatar="🧑‍🌾"):
-        st.markdown(prompt)
-    st.session_state.messages.append({"role": "user", "content": prompt})
+        st.markdown(text_input)
+    st.session_state.messages.append({"role": "user", "content": text_input})
     
-    # SAUVEGARDE UTILISATEUR
-    save_chat(st.session_state.session_id, st.session_state.messages)
+    # SAUVEGARDE (avec user_id)
+    save_chat(st.session_state.session_id, st.session_state.messages, user_id=user.id)
     
-    # Préparation de l'historique
+    # Réponse Assistant
     history = [(m["content"], r["content"]) for m, r in zip(st.session_state.messages[::2], st.session_state.messages[1::2])]
     
-    # Génération de la réponse
     with st.chat_message("assistant", avatar=LOGO_PATH):
         message_placeholder = st.empty()
         full_response = ""
         
-        # Container pour les étapes de réflexion
         with st.status("Analyse de votre demande...", expanded=True) as status:
             try:
-                # Appel du générateur (Streaming)
-                stream = query_rag(
-                    prompt, 
-                    soil_type=selected_soil, 
-                    location=location,
-                    chat_history=history
-                )
+                stream = query_rag(text_input, soil_type=selected_soil, location=location, chat_history=history)
                 
                 for event in stream:
                     if event["type"] == "status":
@@ -427,33 +366,19 @@ if prompt:
                         full_response += event["content"]
                         message_placeholder.markdown(full_response + "▌")
                 
-                # Fin du streaming
                 status.update(label="Réponse terminée", state="complete", expanded=False)
                 message_placeholder.markdown(full_response)
                 
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
+                save_chat(st.session_state.session_id, st.session_state.messages, user_id=user.id)
                 
-                # SAUVEGARDE ASSISTANT
-                save_chat(st.session_state.session_id, st.session_state.messages)
-                
-                # --- TTS (Synthèse Vocale) ---
-                if audio_value:
-                    try:
-                        tts = gTTS(text=full_response, lang='fr', slow=False)
-                        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_mp3:
-                            tts.save(tmp_mp3.name)
-                            st.audio(tmp_mp3.name, format="audio/mp3", autoplay=True)
-                    except Exception as e:
-                        pass # Silent fail for audio to not block chat
-                    
             except Exception as e:
                 status.update(label="Erreur rencontrée", state="error")
-                error_msg = f"Désolé, j'ai rencontré une difficulté : {str(e)}"
-                message_placeholder.error(error_msg)
+                message_placeholder.error(f"Désolé, j'ai rencontré une difficulté : {str(e)}")
 
 # Footer
 st.markdown("""
-    <div style="text-align: center; color: #9e9e9e; font-size: 0.8rem; margin-top: 5rem; padding: 2rem;">
-    © 2026 Tèwou Agro - L'IA au service de la souveraineté alimentaire. fait par Fadel ADAM
-    </div>
-    """, unsafe_allow_html=True)
+<div style="text-align: center; color: #9e9e9e; font-size: 0.8rem; margin-top: 5rem; padding: 2rem;">
+© 2026 Tèwou Agro - L'IA au service de la souveraineté alimentaire. fait par Fadel ADAM
+</div>
+""", unsafe_allow_html=True)

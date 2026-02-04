@@ -6,9 +6,23 @@ import uuid
 import time
 from datetime import datetime
 import logging
+from supabase import create_client, Client
+import streamlit as st
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# --- CONFIGURATION SUPABASE ---
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        logger.info("Client Supabase initialisé.")
+    except Exception as e:
+        logger.error(f"Erreur initialisation client Supabase: {e}")
 
 # Pool de connexions PostgreSQL
 connection_pool = None
@@ -45,11 +59,12 @@ def create_tables():
         conn = connection_pool.getconn()
         cursor = conn.cursor()
         
-        # Table des sessions
+        # Table des sessions (avec user_id optionnel pour compatibilité)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS chat_sessions (
                 id SERIAL PRIMARY KEY,
                 session_id VARCHAR(255) UNIQUE NOT NULL,
+                user_id UUID,
                 title TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -59,8 +74,7 @@ def create_tables():
         # Index pour optimiser les requêtes
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_session_id ON chat_sessions(session_id);
-        """)
-        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_id ON chat_sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_updated_at ON chat_sessions(updated_at DESC);
         """)
         
@@ -81,7 +95,6 @@ def create_tables():
         """)
         
         conn.commit()
-        logger.info("Tables créées avec succès.")
     except Exception as e:
         logger.error(f"Erreur lors de la création des tables: {e}")
         if conn:
@@ -104,19 +117,45 @@ def release_connection(conn):
     if connection_pool and conn:
         connection_pool.putconn(conn)
 
+# --- FONCTIONS AUTHENTIFICATION ---
+
+def sign_up(email, password):
+    """Créer un compte utilisateur."""
+    try:
+        res = supabase.auth.sign_up({"email": email, "password": password})
+        return res.user, None
+    except Exception as e:
+        return None, str(e)
+
+def sign_in(email, password):
+    """Se connecter."""
+    try:
+        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+        return res.user, None
+    except Exception as e:
+        return None, str(e)
+
+def sign_out():
+    """Se déconnecter."""
+    try:
+        supabase.auth.sign_out()
+        return True
+    except:
+        return False
+
+# --- GESTION DES CHATS ---
+
 def create_new_session():
     """Génère un nouvel ID de session."""
     return str(uuid.uuid4())
 
-def save_chat(session_id, messages, title=None):
+def save_chat(session_id, messages, user_id=None, title=None):
     """Sauvegarde ou met à jour une session de chat."""
     conn = None
     try:
         conn = get_connection()
         if not conn:
-            # Fallback vers JSON si pas de connexion
-            from src.utils.chat_manager import save_chat as json_save
-            return json_save(session_id, messages, title)
+            return None
         
         cursor = conn.cursor()
         
@@ -133,14 +172,14 @@ def save_chat(session_id, messages, title=None):
                     auto_title = (first_user_msg[:30] + '...') if len(first_user_msg) > 30 else first_user_msg
             
             cursor.execute(
-                "INSERT INTO chat_sessions (session_id, title) VALUES (%s, %s)",
-                (session_id, auto_title)
+                "INSERT INTO chat_sessions (session_id, user_id, title) VALUES (%s, %s, %s)",
+                (session_id, user_id, auto_title)
             )
         else:
-            # Mettre à jour le timestamp
+            # Mettre à jour le timestamp et potentiellement le user_id si manquant
             cursor.execute(
-                "UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE session_id = %s",
-                (session_id,)
+                "UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP, user_id = COALESCE(user_id, %s) WHERE session_id = %s",
+                (user_id, session_id)
             )
         
         # Supprimer les anciens messages et réinsérer
@@ -153,7 +192,6 @@ def save_chat(session_id, messages, title=None):
             )
         
         conn.commit()
-        logger.info(f"Session {session_id} sauvegardée avec {len(messages)} messages.")
     except Exception as e:
         logger.error(f"Erreur lors de la sauvegarde: {e}")
         if conn:
@@ -162,30 +200,38 @@ def save_chat(session_id, messages, title=None):
         if conn:
             release_connection(conn)
 
-def load_all_chats():
-    """Charge toutes les sessions de chat."""
+def load_all_chats(user_id=None):
+    """Charge toutes les sessions de chat filtrées par utilisateur."""
     conn = None
     try:
         conn = get_connection()
         if not conn:
-            # Fallback vers JSON
-            from src.utils.chat_manager import load_all_chats as json_load
-            return json_load()
+            return {}
         
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("""
-            SELECT session_id, title, 
-                   EXTRACT(EPOCH FROM created_at) as created_at,
-                   EXTRACT(EPOCH FROM updated_at) as updated_at
-            FROM chat_sessions
-            ORDER BY updated_at DESC
-        """)
+        
+        if user_id:
+            cursor.execute("""
+                SELECT session_id, title, 
+                       EXTRACT(EPOCH FROM created_at) as created_at,
+                       EXTRACT(EPOCH FROM updated_at) as updated_at
+                FROM chat_sessions
+                WHERE user_id = %s OR user_id IS NULL
+                ORDER BY updated_at DESC
+            """, (user_id,))
+        else:
+            cursor.execute("""
+                SELECT session_id, title, 
+                       EXTRACT(EPOCH FROM created_at) as created_at,
+                       EXTRACT(EPOCH FROM updated_at) as updated_at
+                FROM chat_sessions
+                ORDER BY updated_at DESC
+            """)
         
         sessions = cursor.fetchall()
         
         result = {}
         for session in sessions:
-            # Charger les messages
             cursor.execute("""
                 SELECT role, content 
                 FROM chat_messages 
@@ -210,58 +256,38 @@ def load_all_chats():
         if conn:
             release_connection(conn)
 
-def get_chat(session_id):
-    """Récupère une session spécifique."""
-    chats = load_all_chats()
-    return chats.get(session_id, None)
-
 def delete_chat(session_id):
     """Supprime une session."""
     conn = None
     try:
         conn = get_connection()
-        if not conn:
-            from src.utils.chat_manager import delete_chat as json_delete
-            return json_delete(session_id)
-        
+        if not conn: return
         cursor = conn.cursor()
         cursor.execute("DELETE FROM chat_sessions WHERE session_id = %s", (session_id,))
         conn.commit()
-        logger.info(f"Session {session_id} supprimée.")
     except Exception as e:
-        logger.error(f"Erreur lors de la suppression: {e}")
-        if conn:
-            conn.rollback()
+        if conn: conn.rollback()
     finally:
-        if conn:
-            release_connection(conn)
+        if conn: release_connection(conn)
 
-def delete_all_chats():
-    """Supprime toutes les sessions de chat."""
+def delete_all_chats(user_id=None):
+    """Supprime toutes les sessions de chat (d'un utilisateur)."""
     conn = None
     try:
         conn = get_connection()
-        if not conn:
-            # Pour le fallback JSON (on supprime le contenu du fichier)
-            import json
-            from src.utils.chat_manager import HISTORY_PATH
-            with open(HISTORY_PATH, "w", encoding="utf-8") as f:
-                json.dump({}, f)
-            return True
-        
+        if not conn: return False
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM chat_sessions")
+        if user_id:
+            cursor.execute("DELETE FROM chat_sessions WHERE user_id = %s", (user_id,))
+        else:
+            cursor.execute("DELETE FROM chat_sessions")
         conn.commit()
-        logger.info("Toutes les sessions ont été supprimées.")
         return True
     except Exception as e:
-        logger.error(f"Erreur lors de la suppression totale: {e}")
-        if conn:
-            conn.rollback()
+        if conn: conn.rollback()
         return False
     finally:
-        if conn:
-            release_connection(conn)
+        if conn: release_connection(conn)
 
-# Initialiser le pool au chargement du module
 init_db_pool()
+
