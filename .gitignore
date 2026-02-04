@@ -43,7 +43,7 @@ Thumbs.db
 .streamlit/secrets.toml
 
 # Project specific
-ia/chroma_db/
+# ia/chroma_db/  <-- Removed from ignore to allow deployment
 ia/data/chat_history.json
 *.log
 
