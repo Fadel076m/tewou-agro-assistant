@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # --- CONFIGURATION SUPABASE ---
+supabase: Client = None
 
 def get_supabase_client():
     """Initialise et retourne le client Supabase."""
