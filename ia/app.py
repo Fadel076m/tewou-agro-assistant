@@ -95,6 +95,12 @@ st.markdown("""
         border-radius: 12px;
     }
     
+    /* Chat input field specifically - White background */
+    .stChatInput textarea {
+        background-color: #ffffff !important;
+        color: #1b5e20 !important;
+    }
+    
     .stChatMessage {
         background: rgba(255, 255, 255, 0.03) !important;
         border: 1px solid rgba(255, 255, 255, 0.05);
@@ -106,8 +112,8 @@ st.markdown("""
 
     /* Fix Chat Input Bar Background - GREEN STYLE */
     .stChatInputContainer {
-        padding-bottom: 4rem; /* More space for the input */
-        padding-top: 1.5rem;
+        padding-bottom: 3rem;
+        padding-top: 1rem;
         background: linear-gradient(to top, #1b5e20 0%, #0a2e1a 100%) !important;
         border-top: 2px solid #4caf50;
         box-shadow: 0 -5px 20px rgba(0,0,0,0.5);
@@ -123,15 +129,19 @@ st.markdown("""
         background: transparent !important;
     }
     
-    /* Microphone Styling */
+    /* Microphone Styling - Smaller and Aligned */
     [data-testid="stAudioInput"] button {
-        background-color: #4caf50 !important; /* Green Background */
+        background-color: #4caf50 !important;
         color: white !important;
-        border: none !important;
+        border: 2px solid white !important;
         border-radius: 50%;
-        width: 3rem;
-        height: 3rem;
+        width: 2.2rem;  /* Even smaller */
+        height: 2.2rem;
         box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        padding: 0 !important;
+        display: flex;
+        align-items: center;
+        justify-content: center;
     }
     [data-testid="stAudioInput"] button:hover {
         background-color: #66bb6a !important;
@@ -139,8 +149,8 @@ st.markdown("""
     }
     [data-testid="stAudioInput"] svg {
         fill: white !important;
-        width: 1.5rem;
-        height: 1.5rem;
+        width: 1.1rem;
+        height: 1.1rem;
     }
     
     h1 {
@@ -316,14 +326,14 @@ with st.sidebar:
 # Header
 logo_html = f'<center><img src="data:image/png;base64,{logo_b64}" width="350" style="margin-bottom: 2rem; filter: drop-shadow(0 0 15px rgba(129, 199, 132, 0.4));"></center>' if logo_b64 else ""
 st.markdown(f"""
-    <div class="header-container">
-        {logo_html}
-        <div class="agro-orb">🌱</div>
-        <h1>Tèwou Agro-Assistant</h1>
-        <p style="font-size: 1.2rem; opacity: 0.8; margin-top: 1rem;">
-            Votre compagnon agricole intelligent pour le Sénégal
-        </p>
-    </div>
+<div class="header-container">
+{logo_html}
+<div class="agro-orb">🌱</div>
+<h1>Tèwou Agro-Assistant</h1>
+<p style="font-size: 1.2rem; opacity: 0.8; margin-top: 1rem;">
+Votre compagnon agricole intelligent pour le Sénégal
+</p>
+</div>
 """, unsafe_allow_html=True)
 
 # Affichage de l'historique des messages
@@ -343,10 +353,10 @@ st.markdown("""
 /* Fixer le container du micro */
 [data-testid="stAudioInput"] {
     position: fixed;
-    bottom: 40px;      /* Remonté pour s'aligner avec l'input */
-    right: 30px;       /* Plus à droite */
+    bottom: 45px;       /* Fine-tuned for alignment */
+    right: 25px;
     z-index: 1001;
-    width: 3rem;
+    width: 2.2rem;
 }
 </style>
 """, unsafe_allow_html=True)
