@@ -17,29 +17,37 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # --- CONFIGURATION SUPABASE ---
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-supabase: Client = None
 
 def get_supabase_client():
     """Initialise et retourne le client Supabase."""
     global supabase
     if supabase is not None:
         return supabase
-        
-    if SUPABASE_URL and SUPABASE_KEY:
+    
+    # 1. Tentative via variables d'environnement (local .env ou injected secrets)
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_KEY")
+    
+    # 2. Fallback via st.secrets (Propre à Streamlit Cloud)
+    if not url or not key:
         try:
-            supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            url = url or st.secrets.get("SUPABASE_URL")
+            key = key or st.secrets.get("SUPABASE_KEY")
+        except:
+            pass
+            
+    if url and key:
+        try:
+            supabase = create_client(url, key)
             logger.info("Client Supabase initialisé avec succès.")
             return supabase
         except Exception as e:
             logger.error(f"Erreur initialisation client Supabase: {e}")
     else:
-        logger.warning("SUPABASE_URL ou SUPABASE_KEY manquante.")
+        logger.warning(f"SUPABASE_URL ou SUPABASE_KEY manquante. URL: {'OK' if url else 'MISSING'}, KEY: {'OK' if key else 'MISSING'}")
     return None
 
-# Initialisation immédiate
+# Tentative d'initialisation au chargement
 get_supabase_client()
 
 # Pool de connexions PostgreSQL
