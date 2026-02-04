@@ -15,6 +15,10 @@ st.set_page_config(
     layout="wide"
 )
 
+# Chemins des fichiers
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOGO_PATH = os.path.join(BASE_DIR, "static", "logo.png")
+
 def get_base64_of_bin_file(bin_file):
     try:
         with open(bin_file, 'rb') as f:
@@ -23,7 +27,7 @@ def get_base64_of_bin_file(bin_file):
     except FileNotFoundError:
         return None
 
-logo_b64 = get_base64_of_bin_file("static/logo.png")
+logo_b64 = get_base64_of_bin_file(LOGO_PATH)
 
 # Chargement du CSS Premium (Dark Emerald Theme + Button Fix)
 st.markdown("""
@@ -89,16 +93,10 @@ st.markdown("""
     
     /* Chat inputs & messages */
     .stTextInput>div>div>input {
-        background-color: #ffffff !important; /* White Background for input */
-        border: 2px solid #4caf50 !important; /* Green border */
-        color: #1b5e20 !important; /* Dark Green Text */
+        background: rgba(255, 255, 255, 0.05) !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        color: white !important;
         border-radius: 12px;
-    }
-    
-    /* Chat input field specifically - White background */
-    .stChatInput textarea {
-        background-color: #ffffff !important;
-        color: #1b5e20 !important;
     }
     
     .stChatMessage {
@@ -110,47 +108,37 @@ st.markdown("""
         backdrop-filter: blur(5px);
     }
 
-    /* Fix Chat Input Bar Background - GREEN STYLE */
+    /* Fix Chat Input Bar Background - CLEAN GREEN GRADIENT */
     .stChatInputContainer {
-        padding-bottom: 3rem;
+        padding-bottom: 2.5rem;
         padding-top: 1rem;
         background: linear-gradient(to top, #1b5e20 0%, #0a2e1a 100%) !important;
-        border-top: 2px solid #4caf50;
-        box-shadow: 0 -5px 20px rgba(0,0,0,0.5);
+        border-top: 1px solid #4caf50;
     }
     
-    /* Remove white background from input container wrapper */
-    .stChatInputContainer > div {
+    /* Ensure no white background interference */
+    .stChatInputContainer > div, [data-testid="stAudioInput"] > div {
         background: transparent !important;
     }
     
-    /* Remove white background from audio input container */
-    [data-testid="stAudioInput"] > div {
-        background: transparent !important;
-    }
-    
-    /* Microphone Styling - Smaller and Aligned */
+    /* Microphone Styling - Clean and Aligned */
     [data-testid="stAudioInput"] button {
         background-color: #4caf50 !important;
         color: white !important;
-        border: 2px solid white !important;
+        border: none !important;
         border-radius: 50%;
-        width: 2.2rem;  /* Even smaller */
-        height: 2.2rem;
+        width: 3rem;
+        height: 3rem;
         box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-        padding: 0 !important;
-        display: flex;
-        align-items: center;
-        justify-content: center;
     }
     [data-testid="stAudioInput"] button:hover {
         background-color: #66bb6a !important;
-        transform: scale(1.1);
+        transform: scale(1.05);
     }
     [data-testid="stAudioInput"] svg {
         fill: white !important;
-        width: 1.1rem;
-        height: 1.1rem;
+        width: 1.5rem;
+        height: 1.5rem;
     }
     
     h1 {
@@ -338,7 +326,7 @@ Votre compagnon agricole intelligent pour le Sénégal
 
 # Affichage de l'historique des messages
 for message in st.session_state.messages:
-    avatar = "🧑‍🌾" if message["role"] == "user" else "static/logo.png"
+    avatar = "🧑‍🌾" if message["role"] == "user" else LOGO_PATH
     with st.chat_message(message["role"], avatar=avatar):
         st.markdown(message["content"])
 
@@ -353,10 +341,10 @@ st.markdown("""
 /* Fixer le container du micro */
 [data-testid="stAudioInput"] {
     position: fixed;
-    bottom: 45px;       /* Fine-tuned for alignment */
+    bottom: 35px;
     right: 25px;
     z-index: 1001;
-    width: 2.2rem;
+    width: 3rem;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -402,7 +390,7 @@ if prompt:
     history = [(m["content"], r["content"]) for m, r in zip(st.session_state.messages[::2], st.session_state.messages[1::2])]
     
     # Génération de la réponse
-    with st.chat_message("assistant", avatar="static/logo.png"):
+    with st.chat_message("assistant", avatar=LOGO_PATH):
         message_placeholder = st.empty()
         full_response = ""
         
