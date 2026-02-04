@@ -5,24 +5,41 @@ from psycopg2.extras import RealDictCursor
 import uuid
 import time
 from datetime import datetime
-import logging
 from supabase import create_client, Client
 import streamlit as st
+from dotenv import load_dotenv
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Charger les variables d'environnement (.env)
+load_dotenv()
 
 # --- CONFIGURATION SUPABASE ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 supabase: Client = None
-if SUPABASE_URL and SUPABASE_KEY:
-    try:
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        logger.info("Client Supabase initialisé.")
-    except Exception as e:
-        logger.error(f"Erreur initialisation client Supabase: {e}")
+
+def get_supabase_client():
+    """Initialise et retourne le client Supabase."""
+    global supabase
+    if supabase is not None:
+        return supabase
+        
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            logger.info("Client Supabase initialisé avec succès.")
+            return supabase
+        except Exception as e:
+            logger.error(f"Erreur initialisation client Supabase: {e}")
+    else:
+        logger.warning("SUPABASE_URL ou SUPABASE_KEY manquante.")
+    return None
+
+# Initialisation immédiate
+get_supabase_client()
 
 # Pool de connexions PostgreSQL
 connection_pool = None
@@ -121,27 +138,36 @@ def release_connection(conn):
 
 def sign_up(email, password):
     """Créer un compte utilisateur."""
+    client = get_supabase_client()
+    if not client:
+        return None, "Configuration Supabase manquante (URL/KEY)."
     try:
-        res = supabase.auth.sign_up({"email": email, "password": password})
+        res = client.auth.sign_up({"email": email, "password": password})
         return res.user, None
     except Exception as e:
         return None, str(e)
 
 def sign_in(email, password):
     """Se connecter."""
+    client = get_supabase_client()
+    if not client:
+        return None, "Configuration Supabase manquante (URL/KEY)."
     try:
-        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+        res = client.auth.sign_in_with_password({"email": email, "password": password})
         return res.user, None
     except Exception as e:
         return None, str(e)
 
 def sign_out():
     """Se déconnecter."""
-    try:
-        supabase.auth.sign_out()
-        return True
-    except:
-        return False
+    client = get_supabase_client()
+    if client:
+        try:
+            client.auth.sign_out()
+            return True
+        except:
+            pass
+    return False
 
 # --- GESTION DES CHATS ---
 
