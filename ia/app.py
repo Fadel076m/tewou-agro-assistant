@@ -230,7 +230,7 @@ def show_login_page():
                         if error:
                             st.error(f"Erreur : {error}")
                         else:
-                            st.success("Compte créé avec succès !")
+                            st.success("Compte créé avec succès ! Vous pouvez maintenant vous connecter (onglet Connexion).")
 
 # --- GESTION DE SESSION ---
 
