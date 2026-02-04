@@ -20,32 +20,40 @@ load_dotenv()
 supabase: Client = None
 
 def get_supabase_client():
-    """Initialise et retourne le client Supabase."""
+    """Initialise et retourne le client Supabase avec diagnostics."""
     global supabase
     if supabase is not None:
         return supabase
     
-    # 1. Tentative via variables d'environnement (local .env ou injected secrets)
+    # Tentative de récupération des clés
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_KEY")
     
-    # 2. Fallback via st.secrets (Propre à Streamlit Cloud)
+    source = "ENV"
+    
     if not url or not key:
         try:
-            url = url or st.secrets.get("SUPABASE_URL")
-            key = key or st.secrets.get("SUPABASE_KEY")
+            if hasattr(st, "secrets"):
+                url = url or st.secrets.get("SUPABASE_URL")
+                key = key or st.secrets.get("SUPABASE_KEY")
+                source = "SECRETS"
         except:
             pass
             
     if url and key:
         try:
             supabase = create_client(url, key)
-            logger.info("Client Supabase initialisé avec succès.")
+            logger.info(f"Client Supabase initialisé via {source}")
             return supabase
         except Exception as e:
-            logger.error(f"Erreur initialisation client Supabase: {e}")
+            logger.error(f"Erreur initialisation client Supabase ({source}): {e}")
+            st.error(f"Erreur technique Supabase : {e}")
     else:
-        logger.warning(f"SUPABASE_URL ou SUPABASE_KEY manquante. URL: {'OK' if url else 'MISSING'}, KEY: {'OK' if key else 'MISSING'}")
+        missing = []
+        if not url: missing.append("URL")
+        if not key: missing.append("KEY")
+        msg = f"Configuration Supabase manquante : {', '.join(missing)} (Source tentée: {source})"
+        logger.warning(msg)
     return None
 
 # Tentative d'initialisation au chargement

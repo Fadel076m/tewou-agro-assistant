@@ -1,5 +1,10 @@
 import streamlit as st
 import os
+from dotenv import load_dotenv
+
+# Charger les variables d'environnement au plus tôt
+load_dotenv()
+
 import speech_recognition as sr
 from gtts import gTTS
 import tempfile
@@ -7,7 +12,8 @@ from src.rag_chain import query_rag
 from src.utils.metadata import get_all_metadata
 from src.utils.db_manager import (
     load_all_chats, save_chat, create_new_session, 
-    delete_chat, delete_all_chats, sign_in, sign_up, sign_out
+    delete_chat, delete_all_chats, sign_in, sign_up, sign_out,
+    get_supabase_client
 )
 import base64
 
@@ -175,6 +181,15 @@ st.markdown("""
 
 def show_login_page():
     st.markdown('<div class="header-container"><div class="agro-orb">🌱</div><h1>Accès Tèwou Agro</h1><p style="font-size: 1.2rem; opacity: 0.8; margin-top: 1rem;">Connectez-vous pour accéder à votre assistant personnalisé</p></div>', unsafe_allow_html=True)
+    
+    # Outil de diagnostic (visible uniquement si config manquante)
+    if not get_supabase_client():
+        with st.expander("🛠️ Diagnostic de connexion (Problème détecté)", expanded=True):
+            st.error("L'application ne trouve pas vos clés de sécurité Supabase.")
+            st.info("Vérifiez que vous avez bien ajouté `SUPABASE_URL` et `SUPABASE_KEY` dans les **Secrets** de Streamlit Cloud.")
+            st.write("**État des variables :**")
+            st.write(f"- SUPABASE_URL: {'✅ Détectée' if os.getenv('SUPABASE_URL') or (hasattr(st, 'secrets') and 'SUPABASE_URL' in st.secrets) else '❌ Manquante'}")
+            st.write(f"- SUPABASE_KEY: {'✅ Détectée' if os.getenv('SUPABASE_KEY') or (hasattr(st, 'secrets') and 'SUPABASE_KEY' in st.secrets) else '❌ Manquante'}")
     
     # Center the login form
     _, col, _ = st.columns([1, 2, 1])
