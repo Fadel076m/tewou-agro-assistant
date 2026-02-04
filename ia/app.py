@@ -351,23 +351,22 @@ for message in st.session_state.messages:
 chat_container = st.container()
 input_container = st.empty()
 
-# CSS pour fixer le micro en bas à côté de la barre de chat
-st.markdown("""
-<style>
-/* Fixer le container du micro */
-[data-testid="stAudioInput"] {
-    position: fixed;
-    bottom: 35px;
-    right: 25px;
-    z-index: 1001;
-    width: 3rem;
-}
-</style>
-""", unsafe_allow_html=True)
+# CSS pour fixer le micro (Désactivé temporairement)
+# st.markdown("""
+# <style>
+# [data-testid="stAudioInput"] {
+#     position: fixed;
+#     bottom: 35px;
+#     right: 25px;
+#     z-index: 1001;
+#     width: 3rem;
+# }
+# </style>
+# """, unsafe_allow_html=True)
 
 # Zone de saisie
-# On place le micro en premier (il sera fixé par CSS)
-audio_value = st.audio_input("Micro", label_visibility="collapsed")
+# audio_value = st.audio_input("Micro", label_visibility="collapsed")
+audio_value = None
 text_input = st.chat_input("Posez votre question agricole ici...")
 
 prompt = None
