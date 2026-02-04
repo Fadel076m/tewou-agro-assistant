@@ -54,12 +54,25 @@ def get_vectorstore():
     """
     Loads the existing vector store. Cached to prevent reloading.
     """
-    embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
-    if os.path.exists(DB_DIR):
-        logger.info("Loading vector store from disk found...")
-        return Chroma(persist_directory=DB_DIR, embedding_function=embeddings)
-    else:
-        logger.warning("Vector store directory not found.")
+    logger.info(f"Recherche de la base vectorielle à: {DB_DIR}")
+    
+    try:
+        embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
+        if os.path.exists(DB_DIR):
+            logger.info("Base vectorielle trouvée sur le disque. Chargement...")
+            # Vérifier que c'est bien une base Chroma (contient index ou sqlite)
+            files = os.listdir(DB_DIR)
+            logger.info(f"Fichiers dans {DB_DIR}: {files}")
+            return Chroma(persist_directory=DB_DIR, embedding_function=embeddings)
+        else:
+            logger.warning(f"Répertoire de la base vectorielle non trouvé à: {DB_DIR}")
+            # Diagnostic : Lister le contenu du dossier parent
+            parent = os.path.dirname(DB_DIR)
+            if os.path.exists(parent):
+                logger.info(f"Contenu de {parent}: {os.listdir(parent)}")
+            return None
+    except Exception as e:
+        logger.error(f"Erreur lors du chargement de la base vectorielle: {e}")
         return None
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ def init_db_pool():
         logger.warning("DATABASE_URL non définie. Utilisation du mode JSON fallback.")
         return None
     
+    logger.info("DATABASE_URL détectée. Tentative de connexion PostgreSQL...")
     try:
         connection_pool = psycopg2.pool.SimpleConnectionPool(
             1, 10,  # min et max connexions
@@ -231,6 +232,33 @@ def delete_chat(session_id):
         logger.error(f"Erreur lors de la suppression: {e}")
         if conn:
             conn.rollback()
+    finally:
+        if conn:
+            release_connection(conn)
+
+def delete_all_chats():
+    """Supprime toutes les sessions de chat."""
+    conn = None
+    try:
+        conn = get_connection()
+        if not conn:
+            # Pour le fallback JSON (on supprime le contenu du fichier)
+            import json
+            from src.utils.chat_manager import HISTORY_PATH
+            with open(HISTORY_PATH, "w", encoding="utf-8") as f:
+                json.dump({}, f)
+            return True
+        
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM chat_sessions")
+        conn.commit()
+        logger.info("Toutes les sessions ont été supprimées.")
+        return True
+    except Exception as e:
+        logger.error(f"Erreur lors de la suppression totale: {e}")
+        if conn:
+            conn.rollback()
+        return False
     finally:
         if conn:
             release_connection(conn)

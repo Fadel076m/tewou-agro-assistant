@@ -238,10 +238,18 @@ if "session_id" not in st.session_state:
 # Sidebar
 with st.sidebar:
     # 1. Action: Nouveau Chat
-    if st.button("➕ Nouveau chat", use_container_width=True, type="primary"):
-        st.session_state.session_id = create_new_session()
-        st.session_state.messages = []
-        st.rerun()
+    cols_nav = st.columns([0.8, 0.2])
+    with cols_nav[0]:
+        if st.button("➕ Nouveau chat", use_container_width=True, type="primary"):
+            st.session_state.session_id = create_new_session()
+            st.session_state.messages = []
+            st.rerun()
+    with cols_nav[1]:
+        if st.button("🗑️", help="Supprimer tout l'historique"):
+            if delete_all_chats():
+                st.session_state.session_id = create_new_session()
+                st.session_state.messages = []
+                st.rerun()
     
     st.markdown("---")
     
@@ -272,12 +280,20 @@ with st.sidebar:
                     continue
 
             found_chats += 1
-            # Affichage du bouton pour charger la session
-            # On utilise une clé unique pour le bouton
-            if st.button(f"📄 {title}", key=f"hist_{s_id}", use_container_width=True):
-                st.session_state.session_id = s_id
-                st.session_state.messages = data["messages"]
-                st.rerun()
+            # Affichage du bouton pour charger la session + Bouton supprimer
+            cols = st.columns([0.85, 0.15])
+            with cols[0]:
+                if st.button(f"📄 {title}", key=f"hist_{s_id}", use_container_width=True):
+                    st.session_state.session_id = s_id
+                    st.session_state.messages = data["messages"]
+                    st.rerun()
+            with cols[1]:
+                if st.button("❌", key=f"del_{s_id}", help="Supprimer cette discussion"):
+                    delete_chat(s_id)
+                    if st.session_state.session_id == s_id:
+                        st.session_state.session_id = create_new_session()
+                        st.session_state.messages = []
+                    st.rerun()
         
         if found_chats == 0:
             if search_query:
