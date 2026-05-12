@@ -1,9 +1,14 @@
 """
 src/utils/db_manager.py - Gestion PostgreSQL + Auth Supabase.
 
-Stockage a deux niveaux :
-  1. session_state (in-memory, toujours disponible)
-  2. PostgreSQL via Supabase (persistant entre sessions)
+Strategie de persistance :
+  - session_state : cache rapide en memoire pour la session courante
+  - PostgreSQL    : stockage persistant entre sessions
+
+Cycle de vie :
+  CONNEXION   -> warm_cache_from_db(user_id)  : DB -> cache
+  UTILISATION -> save_chat()                  : cache + DB en meme temps
+  DECONNEXION -> sync_cache_to_db()           : cache -> DB (filet de securite)
 """
 import os
 import logging
@@ -74,7 +79,7 @@ def _get_pool():
 
     database_url = _get_env("DATABASE_URL")
     if not database_url:
-        logger.warning("DATABASE_URL non definie - historique en memoire uniquement.")
+        logger.warning("DATABASE_URL non definie - mode cache uniquement.")
         _pool_failed = True
         return None
 
@@ -93,9 +98,10 @@ def _get_pool():
         _pool = None
     return _pool
 
+
 @contextmanager
 def db_connection():
-    """Context manager pour les connexions PostgreSQL."""
+    """Context manager PostgreSQL - commit auto, rollback en cas d'erreur."""
     current_pool = _get_pool()
     if current_pool is None:
         raise RuntimeError("Base de donnees non disponible.")
@@ -153,10 +159,11 @@ def _create_tables():
         current_pool.putconn(conn)
 
 # ---------------------------------------------------------------------------
-# CACHE SESSION_STATE (Niveau 1)
+# CACHE SESSION_STATE (Niveau 1 - toujours disponible)
 # ---------------------------------------------------------------------------
 
 def _cache_save(session_id, messages, user_id=None, title=None):
+    """Sauvegarde dans le cache session_state."""
     try:
         import streamlit as st
         if _CACHE_KEY not in st.session_state:
@@ -178,9 +185,11 @@ def _cache_save(session_id, messages, user_id=None, title=None):
             if uid:
                 cache[session_id]["user_id"] = uid
     except Exception as exc:
-        logger.warning(f"Cache session_state save error: {exc}")
+        logger.warning(f"Cache save error: {exc}")
+
 
 def _cache_load(user_id=None):
+    """Charge depuis le cache session_state."""
     try:
         import streamlit as st
         cache = st.session_state.get(_CACHE_KEY, {})
@@ -191,8 +200,152 @@ def _cache_load(user_id=None):
     except Exception:
         return {}
 
-def _db_available():
-    return _get_pool() is not None
+# ---------------------------------------------------------------------------
+# PERSISTANCE DB - fonctions internes
+# ---------------------------------------------------------------------------
+
+def _save_to_db(session_id, messages, user_id=None, title=None):
+    """Sauvegarde une session dans PostgreSQL (fonction interne)."""
+    uid = str(user_id) if user_id else None
+    with db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM chat_sessions WHERE session_id = %s",
+                (session_id,)
+            )
+            if not cur.fetchone():
+                auto_title = title or _auto_title(messages)
+                cur.execute(
+                    "INSERT INTO chat_sessions (session_id, user_id, title)"
+                    " VALUES (%s, %s, %s)",
+                    (session_id, uid, auto_title)
+                )
+            else:
+                cur.execute(
+                    "UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP,"
+                    " user_id = COALESCE(user_id, %s) WHERE session_id = %s",
+                    (uid, session_id)
+                )
+            cur.execute(
+                "DELETE FROM chat_messages WHERE session_id = %s",
+                (session_id,)
+            )
+            if messages:
+                cur.executemany(
+                    "INSERT INTO chat_messages (session_id, role, content)"
+                    " VALUES (%s, %s, %s)",
+                    [(session_id, m["role"], m["content"]) for m in messages]
+                )
+
+
+def _load_from_db(user_id=None):
+    """Charge toutes les sessions depuis PostgreSQL (fonction interne)."""
+    uid = str(user_id) if user_id else None
+    result = {}
+    with db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if uid:
+                cur.execute(
+                    "SELECT session_id, title,"
+                    " EXTRACT(EPOCH FROM created_at) AS created_at,"
+                    " EXTRACT(EPOCH FROM updated_at) AS updated_at"
+                    " FROM chat_sessions WHERE user_id = %s"
+                    " ORDER BY updated_at DESC",
+                    (uid,)
+                )
+            else:
+                cur.execute(
+                    "SELECT session_id, title,"
+                    " EXTRACT(EPOCH FROM created_at) AS created_at,"
+                    " EXTRACT(EPOCH FROM updated_at) AS updated_at"
+                    " FROM chat_sessions ORDER BY updated_at DESC"
+                )
+            sessions = cur.fetchall()
+            for session in sessions:
+                cur.execute(
+                    "SELECT role, content FROM chat_messages"
+                    " WHERE session_id = %s ORDER BY created_at",
+                    (session["session_id"],)
+                )
+                result[session["session_id"]] = {
+                    "title":      session["title"] or "Discussion sans titre",
+                    "created_at": float(session["created_at"] or 0),
+                    "updated_at": float(session["updated_at"] or 0),
+                    "messages":   [
+                        {"role": m["role"], "content": m["content"]}
+                        for m in cur.fetchall()
+                    ],
+                }
+    return result
+
+# ---------------------------------------------------------------------------
+# SYNCHRONISATION CACHE <-> DB (appels explicites)
+# ---------------------------------------------------------------------------
+
+def sync_cache_to_db():
+    """
+    Pousse TOUTES les sessions du cache session_state vers PostgreSQL.
+
+    A appeler AVANT la deconnexion pour garantir la persistance.
+    Retourne le nombre de sessions sauvegardees.
+    """
+    try:
+        import streamlit as st
+        cache = st.session_state.get(_CACHE_KEY, {})
+        if not cache:
+            logger.info("sync_cache_to_db : cache vide, rien a synchroniser.")
+            return 0
+
+        saved = 0
+        for session_id, data in cache.items():
+            messages = data.get("messages", [])
+            user_id = data.get("user_id")
+            title = data.get("title")
+            if not messages:
+                continue
+            try:
+                _save_to_db(session_id, messages, user_id, title)
+                saved += 1
+            except Exception as exc:
+                logger.warning(f"sync: echec pour {session_id[:8]}... : {exc}")
+
+        logger.info(f"sync_cache_to_db : {saved}/{len(cache)} sessions synchronisees.")
+        return saved
+    except Exception as exc:
+        logger.error(f"sync_cache_to_db global error: {exc}")
+        return 0
+
+
+def warm_cache_from_db(user_id):
+    """
+    Charge les sessions depuis PostgreSQL dans le cache session_state.
+
+    A appeler APRES connexion pour restaurer l'historique de l'utilisateur.
+    Retourne le nombre de sessions restaurees.
+    """
+    try:
+        db_chats = _load_from_db(user_id)
+        if not db_chats:
+            logger.info("warm_cache_from_db : aucune session en base pour cet utilisateur.")
+            return 0
+
+        import streamlit as st
+        if _CACHE_KEY not in st.session_state:
+            st.session_state[_CACHE_KEY] = {}
+
+        cache = st.session_state[_CACHE_KEY]
+        uid = str(user_id)
+        restored = 0
+        for s_id, data in db_chats.items():
+            if s_id not in cache:
+                cache[s_id] = {**data, "user_id": uid}
+                restored += 1
+
+        logger.info(f"warm_cache_from_db : {restored} sessions restaurees depuis la DB.")
+        return restored
+    except Exception as exc:
+        logger.warning(f"warm_cache_from_db error: {exc}")
+        return 0
 
 # ---------------------------------------------------------------------------
 # AUTH SUPABASE
@@ -208,6 +361,7 @@ def sign_up(email, password):
     except Exception as exc:
         return None, str(exc)
 
+
 def sign_in(email, password):
     client = get_supabase_client()
     if not client:
@@ -217,6 +371,7 @@ def sign_in(email, password):
         return res.user, None
     except Exception as exc:
         return None, str(exc)
+
 
 def sign_out():
     client = get_supabase_client()
@@ -235,108 +390,47 @@ def sign_out():
 def create_new_session():
     return str(uuid.uuid4())
 
-def save_chat(session_id, messages, user_id=None, title=None):
-    """Sauvegarde a deux niveaux : session_state d'abord, puis PostgreSQL."""
-    # Niveau 1 : cache session_state (toujours)
-    _cache_save(session_id, messages, user_id, title)
 
-    # Niveau 2 : PostgreSQL (best-effort)
-    uid = str(user_id) if user_id else None
+def save_chat(session_id, messages, user_id=None, title=None):
+    """
+    Sauvegarde a deux niveaux :
+      1. Cache session_state (immediat, infaillible)
+      2. PostgreSQL (persistant, best-effort)
+    """
+    _cache_save(session_id, messages, user_id, title)
     try:
-        with db_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT id FROM chat_sessions WHERE session_id = %s",
-                    (session_id,)
-                )
-                if not cur.fetchone():
-                    auto_title = title or _auto_title(messages)
-                    cur.execute(
-                        "INSERT INTO chat_sessions (session_id, user_id, title) VALUES (%s, %s, %s)",
-                        (session_id, uid, auto_title)
-                    )
-                else:
-                    cur.execute(
-                        "UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP,"
-                        " user_id = COALESCE(user_id, %s) WHERE session_id = %s",
-                        (uid, session_id)
-                    )
-                cur.execute(
-                    "DELETE FROM chat_messages WHERE session_id = %s",
-                    (session_id,)
-                )
-                if messages:
-                    cur.executemany(
-                        "INSERT INTO chat_messages (session_id, role, content) VALUES (%s, %s, %s)",
-                        [(session_id, m["role"], m["content"]) for m in messages]
-                    )
+        _save_to_db(session_id, messages, user_id, title)
     except Exception as exc:
-        logger.warning(f"DB save echoue pour {session_id} (cache conserve) : {exc}")
+        logger.warning(f"DB save echoue pour {session_id[:8]}... (cache conserve) : {exc}")
+
 
 def load_all_chats(user_id=None):
     """
-    Charge toutes les sessions. Fusionne DB + cache session_state.
-    Si la DB est indisponible, retourne uniquement le cache.
+    Charge toutes les sessions. Fusionne DB + cache.
+    Si DB indisponible, retourne uniquement le cache.
     """
     uid = str(user_id) if user_id else None
     db_chats = {}
-
     try:
-        with db_connection() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                if uid:
-                    cur.execute(
-                        "SELECT session_id, title,"
-                        " EXTRACT(EPOCH FROM created_at) AS created_at,"
-                        " EXTRACT(EPOCH FROM updated_at) AS updated_at"
-                        " FROM chat_sessions WHERE user_id = %s"
-                        " ORDER BY updated_at DESC",
-                        (uid,)
-                    )
-                else:
-                    cur.execute(
-                        "SELECT session_id, title,"
-                        " EXTRACT(EPOCH FROM created_at) AS created_at,"
-                        " EXTRACT(EPOCH FROM updated_at) AS updated_at"
-                        " FROM chat_sessions ORDER BY updated_at DESC"
-                    )
-                sessions = cur.fetchall()
-                for session in sessions:
-                    cur.execute(
-                        "SELECT role, content FROM chat_messages"
-                        " WHERE session_id = %s ORDER BY created_at",
-                        (session["session_id"],)
-                    )
-                    db_chats[session["session_id"]] = {
-                        "title":      session["title"] or "Discussion sans titre",
-                        "created_at": float(session["created_at"] or 0),
-                        "updated_at": float(session["updated_at"] or 0),
-                        "messages":   [
-                            {"role": m["role"], "content": m["content"]}
-                            for m in cur.fetchall()
-                        ],
-                    }
+        db_chats = _load_from_db(uid)
     except Exception as exc:
         logger.warning(f"DB load echoue, fallback cache : {exc}")
 
-    # Fusion : le cache ajoute les sessions non encore en DB
     cache = _cache_load(uid)
     merged = dict(db_chats)
     for s_id, data in cache.items():
         if s_id not in merged and len(data.get("messages", [])) > 0:
             merged[s_id] = {k: v for k, v in data.items() if k != "user_id"}
-
     return merged
 
+
 def delete_chat(session_id):
-    # Cache
+    """Supprime du cache ET de la DB."""
     try:
         import streamlit as st
-        cache = st.session_state.get(_CACHE_KEY, {})
-        cache.pop(session_id, None)
+        st.session_state.get(_CACHE_KEY, {}).pop(session_id, None)
     except Exception:
         pass
-    # DB
     try:
         with db_connection() as conn:
             with conn.cursor() as cur:
@@ -344,26 +438,24 @@ def delete_chat(session_id):
                     "DELETE FROM chat_sessions WHERE session_id = %s",
                     (session_id,)
                 )
-        return True
     except Exception as exc:
         logger.warning(f"DB delete echoue (supprime du cache) : {exc}")
-        return True
+    return True
+
 
 def delete_all_chats(user_id=None):
+    """Supprime toutes les sessions du cache ET de la DB."""
     uid = str(user_id) if user_id else None
-    # Cache
     try:
         import streamlit as st
         cache = st.session_state.get(_CACHE_KEY, {})
         if uid:
-            to_del = [k for k, v in cache.items() if v.get("user_id") == uid]
-            for k in to_del:
+            for k in [k for k, v in cache.items() if v.get("user_id") == uid]:
                 del cache[k]
         else:
             st.session_state[_CACHE_KEY] = {}
     except Exception:
         pass
-    # DB
     try:
         with db_connection() as conn:
             with conn.cursor() as cur:
@@ -371,10 +463,10 @@ def delete_all_chats(user_id=None):
                     cur.execute("DELETE FROM chat_sessions WHERE user_id = %s", (uid,))
                 else:
                     cur.execute("DELETE FROM chat_sessions")
-        return True
     except Exception as exc:
-        logger.warning(f"DB delete_all echoue (nettoye dans le cache) : {exc}")
-        return True
+        logger.warning(f"DB delete_all echoue : {exc}")
+    return True
+
 
 def update_session_title(session_id, title):
     try:
@@ -393,6 +485,7 @@ def update_session_title(session_id, title):
                 )
     except Exception as exc:
         logger.warning(f"DB update_title echoue : {exc}")
+
 
 def db_status():
     pool_ok = _get_pool() is not None

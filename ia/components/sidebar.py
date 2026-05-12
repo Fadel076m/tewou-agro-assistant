@@ -8,6 +8,8 @@ import streamlit as st
 from datetime import datetime
 from config import Config
 from src.utils.db_manager import (
+    sync_cache_to_db,
+    warm_cache_from_db,
     load_all_chats,
     delete_chat,
     delete_all_chats,
@@ -77,6 +79,10 @@ def render_sidebar(user):
             unsafe_allow_html=True,
         )
         if st.button("Deconnexion", use_container_width=True, key="logout_btn"):
+            with st.spinner("Sauvegarde de vos discussions..."):
+                saved = sync_cache_to_db()
+                if saved > 0:
+                    st.toast(f"{saved} discussion(s) sauvegardee(s).", icon="OK")
             sign_out()
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
