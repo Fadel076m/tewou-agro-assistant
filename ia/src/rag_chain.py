@@ -1,164 +1,208 @@
-import os
+"""
+src/rag_chain.py — Moteur RAG de Tèwou Agro-Assistant.
+
+Pipeline :
+  1. Contextualisation : reformule les questions de suivi en questions autonomes.
+  2. Retrieval : récupère les k documents les plus pertinents depuis ChromaDB.
+  3. Génération : Cohere génère la réponse en streaming avec le contexte récupéré.
+
+Fallback : si le vectorstore est indisponible, répond sans contexte documentaire.
+
+Yields des événements :
+  {"type": "status", "content": str}   — étape en cours
+  {"type": "chunk",  "content": str}   — morceau de la réponse finale
+"""
 import logging
-from dotenv import load_dotenv
+from typing import Generator
+
 from langchain_cohere import ChatCohere
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
+
+from config import Config
 from src.build_vectorstore import get_vectorstore
 
-# Load environment variables
-load_dotenv()
-
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+Event = dict[str, str]
 
-def query_rag(question, soil_type="Non spécifié", location="Sénégal", chat_history=None):
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _format_history(history: list[tuple[str, str]]) -> str:
+    """Formate l'historique de conversation pour le prompt."""
+    return "".join(
+        f"Utilisateur: {u}\nAssistant: {a}\n"
+        for u, a in history
+    )
+
+
+def _format_docs(docs) -> str:
+    """Concatène le contenu des documents récupérés."""
+    return "\n\n".join(doc.page_content for doc in docs)
+
+
+# ── Prompts ───────────────────────────────────────────────────────────────────
+
+_CONTEXTUALIZE_TEMPLATE = """
+Étant donné l'historique de la conversation et la question actuelle,
+si la question fait référence à des éléments précédents, reformulez-la en une
+question autonome compréhensible sans l'historique.
+Ne répondez PAS à la question — reformulez-la seulement.
+Si elle est déjà autonome, renvoyez-la telle quelle.
+
+HISTORIQUE :
+{chat_history}
+
+QUESTION ACTUELLE : {question}
+
+QUESTION REFORMULÉE :"""
+
+_RAG_TEMPLATE = """
+# 🎯 IDENTITÉ ET MANDAT
+Vous êtes **Tèwou Agro-Assistant**, un expert agricole sénégalais virtuel.
+Votre mission est d'accompagner les agriculteurs avec des conseils pratiques,
+précis et bienveillants, exclusivement centrés sur l'agriculture au Sénégal.
+
+# 📜 RÈGLES
+## Domaine d'expertise
+- ✅ Agriculture sénégalaise, cultures locales, sols, climat, irrigation,
+     fertilisation, protection des cultures, calendriers culturaux.
+- ❌ Hors-sujet : politique, économie générale, santé humaine, technologie
+     non agricole. → Répondre poliment : *"Je suis spécialisé dans l'agriculture
+     sénégalaise. Je peux vous aider sur les cultures, le sol, la météo ou les
+     pratiques agricoles."*
+
+# 📊 CONTEXTE UTILISATEUR
+- 🌱 **Type de sol** : {soil_type}
+- 📍 **Localisation** : {location}
+
+# 📚 BASE DE CONNAISSANCES
+{context}
+
+# 💬 HISTORIQUE
+{chat_history}
+
+# 🎤 QUESTION
+{question}
+
+# ✨ INSTRUCTIONS DE RÉPONSE
+0. {introduction_instruction}
+1. Accueil chaleureux (bref si ce n'est pas le début).
+2. Réponse structurée basée sur le contexte et votre expertise.
+3. Application locale liée à {soil_type} et {location}.
+4. Citez les sources si pertinent (ex : "Selon les données FAO…").
+
+**Répondez maintenant :**"""
+
+
+# ── Moteur principal ──────────────────────────────────────────────────────────
+
+def query_rag(
+    question: str,
+    soil_type: str = Config.DEFAULT_SOIL,
+    location: str = Config.DEFAULT_LOCATION,
+    chat_history: list[tuple[str, str]] | None = None,
+) -> Generator[Event, None, None]:
     """
-    Exécute une requête via la chaîne RAG avec agent de reformulation pour les follow-ups.
-    Générateur qui yield des événements de type:
-    - {"type": "status", "content": "Message de statut..."}
-    - {"type": "chunk", "content": "Texte partiel de la réponse..."}
+    Exécute la chaîne RAG et yield des événements de statut/chunk.
+
+    Args:
+        question:     Question de l'utilisateur.
+        soil_type:    Type de sol (depuis Config.SOIL_TYPES).
+        location:     Localité (ex: "Thiès").
+        chat_history: Liste de tuples (user_msg, assistant_msg).
     """
     if chat_history is None:
         chat_history = []
-        
-    # --- PHASE 0 : VÉRIFICATIONS ---
-    yield {"type": "status", "content": "Vérification de la base de connaissances..."}
+
+    llm = ChatCohere(model=Config.LLM_MODEL)
+
+    # ── Phase 0 : Vectorstore ──────────────────────────────────────────────────
+    yield {"type": "status", "content": "Vérification de la base de connaissances…"}
     vectorstore = get_vectorstore()
     rag_available = vectorstore is not None
+
     if not rag_available:
-        logger.warning("Vectorstore indisponible — mode dégradé sans RAG activé.")
-        yield {"type": "status", "content": "⚠️ Base documentaire indisponible, réponse en mode général..."}
+        logger.warning("Vectorstore indisponible — mode dégradé sans RAG.")
+        yield {"type": "status", "content": "⚠️ Base documentaire indisponible, mode général activé…"}
 
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3}) if rag_available else None
-    llm = ChatCohere(model="command-r-08-2024")
-    
-    def format_history(history):
-        formatted = ""
-        for user_msg, ai_msg in history:
-            formatted += f"Utilisateur: {user_msg}\nAssistant: {ai_msg}\n"
-        return formatted
+    retriever = vectorstore.as_retriever(search_kwargs={"k": Config.RAG_K}) if rag_available else None
 
-    # --- ÉTAPE 1 : CONTEXTUALISATION ---
-    # Cette étape transforme une question de suivi (ex: "Et pour l'engrais ?") 
-    # en une question autonome compréhensible par le moteur de recherche.
-    
-    contextualize_template = """
-    Étant donné l'historique de la conversation et la question actuelle de l'utilisateur, 
-    si la question fait référence à des éléments précédents, reformulez-la en une question autonome 
-    qui peut être comprise sans l'historique. Ne répondez pas à la question, reformulez-la simplement.
-    Si la question est déjà autonome, renvoyez-la telle quelle.
-    
-    HISTORIQUE :
-    {chat_history}
-    
-    QUESTION ACTUELLE : {question}
-    
-    QUESTION AUTONOME REFORMULÉE :
-    """
-    contextualize_prompt = ChatPromptTemplate.from_template(contextualize_template)
-    contextualize_chain = contextualize_prompt | llm | StrOutputParser()
-    
+    # ── Phase 1 : Contextualisation (questions de suivi) ──────────────────────
     standalone_question = question
     if chat_history:
-        yield {"type": "status", "content": "Compréhension du contexte..."}
-        standalone_question = contextualize_chain.invoke({
-            "chat_history": format_history(chat_history),
-            "question": question
-        })
-        logger.info(f"Question reformulée : {standalone_question}")
+        yield {"type": "status", "content": "Compréhension du contexte…"}
+        try:
+            ctx_chain = (
+                ChatPromptTemplate.from_template(_CONTEXTUALIZE_TEMPLATE)
+                | llm
+                | StrOutputParser()
+            )
+            standalone_question = ctx_chain.invoke({
+                "chat_history": _format_history(chat_history),
+                "question": question,
+            })
+            logger.info(f"Question reformulée : {standalone_question}")
+        except Exception as exc:
+            logger.warning(f"Contextualisation échouée, question originale conservée : {exc}")
 
-    # --- ÉTAPE 2 : RÉPONSE FINALE AVEC RAG (ou fallback sans RAG) ---
-    yield {"type": "status", "content": "Recherche d'informations pertinentes..." if rag_available else "Génération de la réponse..."}
+    # ── Phase 2 : Retrieval ────────────────────────────────────────────────────
+    yield {
+        "type": "status",
+        "content": "Recherche d'informations pertinentes…" if rag_available else "Génération de la réponse…",
+    }
 
-    # Prompt système ultra-structuré
-    template = """
-    # 🎯 IDENTITÉ ET MANDAT
-    Vous êtes **Tèwou Agro-Assistant**, un expert agricole sénégalais virtuel. Votre mission est d'accompagner les agriculteurs avec des conseils pratiques, précis et bienveillants, exclusivement centrés sur l'agriculture au Sénégal.
-
-    # 📜 RÈGLES DE FONCTIONNEMENT
-    ## DOMAINE D'EXPERTISE (NON-NÉGOCIABLE)
-    - ✅ **SUJETS AUTORISÉS** : Agriculture sénégalaise, cultures locales, sols, climat, météo, saisons, irrigation, fertilisation, protection des cultures, calendriers culturaux
-    - ❌ **SUJETS REFUSÉS** : Toute question hors agriculture sénégalaise, politique, économie générale, santé humaine, technologie hors agriculture
-    - **RÈGLE D'OR** : Si une question sort de votre domaine, répondez chaleureusement mais fermement : *"Je suis désolé, je suis spécialisé uniquement dans l'agriculture sénégalaise. Je peux vous aider avec des questions sur les cultures, le sol, la météo ou les pratiques agricoles au Sénégal."*
-
-    ## QUALITÉS REQUISES
-    - **Praticité** : Toujours donner des conseils applicables immédiatement
-    - **Précision** : Utiliser les données contextuelles (sol, localisation)
-    - **Empathie** : Comprendre les difficultés des agriculteurs
-    - **Clarté** : Expliquer les termes techniques simplement
-
-    # 📊 CONTEXTE UTILISATEUR (PERSONNALISATION)
-    **Profil agricole :**
-    - 🌱 **Type de sol** : {soil_type}
-    - 📍 **Localisation** : {location}
-
-    # 📚 BASE DE CONNAISSANCES (CONTEXTE RÉCUPÉRÉ)
-    {context}
-
-    # 💬 HISTORIQUE DE CONVERSATION (POUR RÉFÉRENCE)
-    {chat_history}
-
-    # 🎤 QUESTION (CONSOLIDÉE)
-    {question}
-
-    # ✨ INSTRUCTIONS DE RÉPONSE
-    0. **{introduction_instruction}**
-    1. **Accueil chaleureux** (Rapide si ce n'est pas le début)
-    2. **Réponse structurée** basée sur le contexte et votre expertise
-    3. **Application locale** liée à {soil_type} et {location}
-    4. **Citation des sources** (ex: "Selon les données météo...")
-
-    **Commencez maintenant votre réponse :
-    """
-
-    prompt = ChatPromptTemplate.from_template(template)
-    
-    def format_docs(docs):
-        return "\n\n".join(doc.page_content for doc in docs)
-
-    # Détermination de l'instruction de présentation
-    intro_text = "Présentez-vous brièvement comme Tèwou Agro-Assistant." if not chat_history else "NE VOUS PRÉSENTEZ PAS. Répondez directement à la question."
-
-    # 1. Récupération des documents (si RAG disponible)
     if rag_available:
-        docs = retriever.invoke(standalone_question)
-        formatted_context = format_docs(docs)
+        try:
+            docs = retriever.invoke(standalone_question)
+            context = _format_docs(docs)
+        except Exception as exc:
+            logger.error(f"Erreur retrieval : {exc}")
+            context = "⚠️ Erreur lors de la récupération des documents."
     else:
-        formatted_context = "⚠️ Base documentaire non disponible. Répondez avec vos connaissances générales sur l'agriculture sénégalaise."
+        context = (
+            "⚠️ Base documentaire non disponible. "
+            "Répondez avec vos connaissances générales sur l'agriculture sénégalaise."
+        )
 
-    yield {"type": "status", "content": "Rédaction de la réponse..."}
+    # ── Phase 3 : Génération en streaming ─────────────────────────────────────
+    yield {"type": "status", "content": "Rédaction de la réponse…"}
 
-    # 2. Chaîne de génération finale
-    final_chain = prompt | llm | StrOutputParser()
-    
-    response_stream = final_chain.stream({
-        "context": formatted_context,
-        "chat_history": format_history(chat_history),
-        "question": question,
-        "soil_type": soil_type,
-        "location": location,
-        "introduction_instruction": intro_text
-    })
-    
-    for chunk in response_stream:
-        yield {"type": "chunk", "content": chunk}
+    intro_instruction = (
+        "Présentez-vous brièvement comme Tèwou Agro-Assistant."
+        if not chat_history
+        else "NE vous présentez PAS. Répondez directement à la question."
+    )
+
+    final_chain = (
+        ChatPromptTemplate.from_template(_RAG_TEMPLATE)
+        | llm
+        | StrOutputParser()
+    )
+
+    try:
+        for chunk in final_chain.stream({
+            "context": context,
+            "chat_history": _format_history(chat_history),
+            "question": question,
+            "soil_type": soil_type,
+            "location": location,
+            "introduction_instruction": intro_instruction,
+        }):
+            yield {"type": "chunk", "content": chunk}
+    except Exception as exc:
+        logger.error(f"Erreur génération : {exc}")
+        yield {"type": "chunk", "content": f"\n\n⚠️ Erreur lors de la génération : {exc}"}
+
+
+# ── Test rapide en CLI ────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Quick test
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--test", action="store_true")
-    args = parser.parse_args()
-    
-    if args.test:
-        print("Test de la chaîne RAG...")
-        # Since it's a generator now, we iterate
-        for event in query_rag("Quel est le meilleur moment pour semer le mil au Sénégal ?"):
-            if event["type"] == "chunk":
-                print(event["content"], end="", flush=True)
-            elif event["type"] == "status":
-                print(f"\n[STATUS: {event['content']}]\n")
-        print("\n\nFin du test.")
+    print("Test de la chaîne RAG…\n")
+    for event in query_rag("Quel est le meilleur moment pour semer le mil au Sénégal ?"):
+        if event["type"] == "chunk":
+            print(event["content"], end="", flush=True)
+        elif event["type"] == "status":
+            print(f"\n[STATUS] {event['content']}")
+    print("\n\nFin du test.")
