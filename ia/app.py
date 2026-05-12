@@ -5,9 +5,6 @@ from dotenv import load_dotenv
 # Charger les variables d'environnement au plus tôt
 load_dotenv()
 
-import speech_recognition as sr
-from gtts import gTTS
-import tempfile
 from src.rag_chain import query_rag
 from src.utils.metadata import get_all_metadata
 from src.utils.db_manager import (
@@ -15,6 +12,8 @@ from src.utils.db_manager import (
     delete_chat, delete_all_chats, sign_in, sign_up, sign_out,
     get_supabase_client
 )
+
+
 import base64
 
 # Configuration de la page
@@ -39,6 +38,7 @@ def get_base64_of_bin_file(bin_file):
     except FileNotFoundError:
         return None
 
+
 logo_b64 = get_base64_of_bin_file(LOGO_PATH)
 
 # Chargement du CSS Premium (Dark Emerald Theme + Button Fix)
@@ -47,6 +47,7 @@ st.markdown("""
     /* Global Styles */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
     
+
     .stApp {
         background: radial-gradient(circle at top right, #0a2e1a 0%, #000000 100%);
         color: #e0e0e0;
@@ -235,6 +236,8 @@ def show_login_page():
                         else:
                             st.success("Compte créé avec succès ! Vous pouvez maintenant vous connecter (onglet Connexion).")
 
+
+
 # --- GESTION DE SESSION ---
 
 if "user" not in st.session_state:
@@ -243,6 +246,10 @@ if "user" not in st.session_state:
 
 # Utilisateur actuel
 user = st.session_state.user
+
+# Valeurs par défaut de configuration (écrasées par la sidebar)
+selected_soil = "Non spécifié"
+location = "Sénégal"
 
 if "session_id" not in st.session_state:
     st.session_state.session_id = create_new_session()
@@ -341,6 +348,7 @@ with st.sidebar:
         st.write(f"**CWD :** `{os.getcwd()}`")
         st.write(f"**Files in CWD :**", os.listdir("."))
 
+
 # --- MAIN CHAT AREA ---
 
 # Header
@@ -358,7 +366,7 @@ Votre compagnon agricole intelligent pour le Sénégal
 
 # Affichage des messages
 for message in st.session_state.messages:
-    avatar = "🧑‍🌾" if message["role"] == "user" else LOGO_PATH
+    avatar = "🧑‍🌾" if message["role"] == "user" else "🌱"
     with st.chat_message(message["role"], avatar=avatar):
         st.markdown(message["content"])
 
@@ -370,14 +378,14 @@ if text_input:
     with st.chat_message("user", avatar="🧑‍🌾"):
         st.markdown(text_input)
     st.session_state.messages.append({"role": "user", "content": text_input})
-    
+
     # SAUVEGARDE (avec user_id)
     save_chat(st.session_state.session_id, st.session_state.messages, user_id=user.id)
-    
+
     # Réponse Assistant
     history = [(m["content"], r["content"]) for m, r in zip(st.session_state.messages[::2], st.session_state.messages[1::2])]
-    
-    with st.chat_message("assistant", avatar=LOGO_PATH):
+
+    with st.chat_message("assistant", avatar="🌱"):
         message_placeholder = st.empty()
         full_response = ""
         
@@ -401,6 +409,7 @@ if text_input:
             except Exception as e:
                 status.update(label="Erreur rencontrée", state="error")
                 message_placeholder.error(f"Désolé, j'ai rencontré une difficulté : {str(e)}")
+
 
 # Footer
 st.markdown("""

@@ -27,11 +27,12 @@ def query_rag(question, soil_type="Non spécifié", location="Sénégal", chat_h
     # --- PHASE 0 : VÉRIFICATIONS ---
     yield {"type": "status", "content": "Vérification de la base de connaissances..."}
     vectorstore = get_vectorstore()
-    if not vectorstore:
-        yield {"type": "chunk", "content": "Désolé, la base de connaissances n'est pas disponible actuellement."}
-        return
-        
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+    rag_available = vectorstore is not None
+    if not rag_available:
+        logger.warning("Vectorstore indisponible — mode dégradé sans RAG activé.")
+        yield {"type": "status", "content": "⚠️ Base documentaire indisponible, réponse en mode général..."}
+
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 3}) if rag_available else None
     llm = ChatCohere(model="command-r-08-2024")
     
     def format_history(history):
@@ -69,10 +70,10 @@ def query_rag(question, soil_type="Non spécifié", location="Sénégal", chat_h
         })
         logger.info(f"Question reformulée : {standalone_question}")
 
-    # --- ÉTAPE 2 : RÉPONSE FINALE AVEC RAG ---
-    yield {"type": "status", "content": "Recherche d'informations pertinentes..."}
-    
-    # Prompt système ultra-structuré 
+    # --- ÉTAPE 2 : RÉPONSE FINALE AVEC RAG (ou fallback sans RAG) ---
+    yield {"type": "status", "content": "Recherche d'informations pertinentes..." if rag_available else "Génération de la réponse..."}
+
+    # Prompt système ultra-structuré
     template = """
     # 🎯 IDENTITÉ ET MANDAT
     Vous êtes **Tèwou Agro-Assistant**, un expert agricole sénégalais virtuel. Votre mission est d'accompagner les agriculteurs avec des conseils pratiques, précis et bienveillants, exclusivement centrés sur l'agriculture au Sénégal.
@@ -121,13 +122,13 @@ def query_rag(question, soil_type="Non spécifié", location="Sénégal", chat_h
     # Détermination de l'instruction de présentation
     intro_text = "Présentez-vous brièvement comme Tèwou Agro-Assistant." if not chat_history else "NE VOUS PRÉSENTEZ PAS. Répondez directement à la question."
 
-    # Pour le streaming, on doit construire la chaîne légèrement différemment pour récupérer les documents si besoin,
-    # mais pour simplifier ici on garde la structure et on stream la réponse finale.
-    
-    # 1. Récupération explicite des docs (pour pouvoir logger ou yield si besoin)
-    docs = retriever.invoke(standalone_question)
-    formatted_context = format_docs(docs)
-    
+    # 1. Récupération des documents (si RAG disponible)
+    if rag_available:
+        docs = retriever.invoke(standalone_question)
+        formatted_context = format_docs(docs)
+    else:
+        formatted_context = "⚠️ Base documentaire non disponible. Répondez avec vos connaissances générales sur l'agriculture sénégalaise."
+
     yield {"type": "status", "content": "Rédaction de la réponse..."}
 
     # 2. Chaîne de génération finale

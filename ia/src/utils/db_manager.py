@@ -256,11 +256,11 @@ def load_all_chats(user_id=None):
         
         if user_id:
             cursor.execute("""
-                SELECT session_id, title, 
+                SELECT session_id, title,
                        EXTRACT(EPOCH FROM created_at) as created_at,
                        EXTRACT(EPOCH FROM updated_at) as updated_at
                 FROM chat_sessions
-                WHERE user_id = %s OR user_id IS NULL
+                WHERE user_id = %s
                 ORDER BY updated_at DESC
             """, (user_id,))
         else:
