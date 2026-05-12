@@ -325,13 +325,21 @@ with st.sidebar:
         selected_soil = st.selectbox("Type de sol", soil_types, index=5)
         location = st.text_input("Localité", "Sénégal")
     
-    st.markdown('<div class="sidebar-title" style="margin-top: 2rem;">📚 Bibliothèque Tèwou</div>', unsafe_allow_html=True)
-    try:
-        metadata = get_all_metadata()
-        if metadata:
-            st.info(f"{len(metadata)} documents indexés")
-    except:
-        pass
+    # 5. Diagnostic (visible uniquement si problème RAG)
+    with st.expander("🛠️ Diagnostic Système"):
+        from src.build_vectorstore import DB_DIR
+        st.write(f"**DB_DIR :** `{DB_DIR}`")
+        if os.path.exists(DB_DIR):
+            st.success("✅ Dossier chroma_db trouvé")
+            st.write("**Fichiers :**", os.listdir(DB_DIR))
+        else:
+            st.error("❌ Dossier chroma_db introuvable")
+            parent = os.path.dirname(DB_DIR)
+            if os.path.exists(parent):
+                st.write(f"Contenu de {parent} :", os.listdir(parent))
+        
+        st.write(f"**CWD :** `{os.getcwd()}`")
+        st.write(f"**Files in CWD :**", os.listdir("."))
 
 # --- MAIN CHAT AREA ---
 
